@@ -1,3 +1,5 @@
+use rand::Rng;
+
 pub const SCREEN_WIDTH: usize = 64;
 pub const SCREEN_HEIGHT: usize = 64;
 
@@ -13,6 +15,7 @@ pub struct Emulator {
     s_regs: [u8; S_REG_AMOUNT],
     pc: u16,
     dt: u16,
+    loop_point: u16,
     i_reg: u16,
     screen: [[u8; SCREEN_HEIGHT]; SCREEN_WIDTH],
     keys: [bool; 6],
@@ -26,10 +29,17 @@ impl Emulator {
             s_regs: [0; S_REG_AMOUNT],
             pc: 0,
             dt: 0,
+            loop_point: 0,
             i_reg: 0,
             screen: [[0; SCREEN_HEIGHT]; SCREEN_WIDTH],
             keys: [false; KEY_AMOUNT],
         }
+    }
+
+
+    pub fn get_loop_point(&mut self) -> u16
+    {
+        return self.loop_point;
     }
 
     pub fn load(&mut self, data: &[u8], start: usize, end: usize) {
@@ -37,12 +47,14 @@ impl Emulator {
     }
 
 
-    pub fn tick(&mut self)
+    pub fn tick(&mut self) -> u16
     {
         let op: u16 = self.fetch_op();
         self.pc+=2;
 
         self.execute(op);
+
+        return self.pc;
     }
 
     pub fn key_down(&mut self, keycode: usize)
@@ -156,10 +168,30 @@ impl Emulator {
                     self.pc += 2;
                 }
             },
-            //SX = random() byte
+            //SX = random() 4 bit number
             (0x7, _, _, _) => {
-                let nn = op & 0xFF;
-                self.s_regs[digit2] = nn as u8;
+                let mut rng = rand::thread_rng();
+
+                let num: u8 = rng.gen_range(0..16);
+                self.s_regs[digit2] = num;
+            },
+            //8NXY Skip N amount if X == Y
+            (0x8, _, _, _) => {
+                let x = self.s_regs[digit3];
+                let y = self.s_regs[digit4];
+
+                if x == y {
+                    self.pc = self.pc.overflowing_add((digit2 as u16*2 as u16).try_into().unwrap()).0;
+                }
+            },
+            //9NXY Skip N amount if X != Y
+            (0x9, _, _, _) => {
+                let x = self.s_regs[digit3];
+                let y = self.s_regs[digit4];
+
+                if x != y {
+                    self.pc = self.pc.overflowing_add((digit2 as u16*2 as u16).try_into().unwrap()).0;
+                }
             },
             //skip if key index at SX is pressed
             (0xA, 0xA, 0x0, _) => {
@@ -196,15 +228,24 @@ impl Emulator {
                         let pixel1 = (full_pixel & 0xF0) >>4;
                         let pixel2 = full_pixel & 0x0F;
 
-                        self.screen[(pos_i.overflowing_add(x).0%SCREEN_WIDTH as u8) as usize][(y.overflowing_add(j as u8).0%SCREEN_WIDTH as u8) as usize] = pixel1;
-                        self.screen[(pos_i.overflowing_add(x).0.overflowing_add(1).0%SCREEN_WIDTH as u8) as usize][(y.overflowing_add(j as u8).0%SCREEN_HEIGHT as u8) as usize] = pixel2;
+                        /* if pixels are 0, we are not going to write them to the screen array because we want them to be transparent
+                            meaning we don't want those black pixels to overlap other colors
+                         */
+                        if pixel1 != 0
+                        {
+                            self.screen[(pos_i.overflowing_add(x).0%SCREEN_WIDTH as u8) as usize][(y.overflowing_add(j as u8).0%SCREEN_WIDTH as u8) as usize] = pixel1;
+                        }
+                        if pixel2 != 0
+                        {
+                            self.screen[(pos_i.overflowing_add(x).0.overflowing_add(1).0%SCREEN_WIDTH as u8) as usize][(y.overflowing_add(j as u8).0%SCREEN_HEIGHT as u8) as usize] = pixel2;
+                        }
 
                     }
                 }
             },
             //uninmplemented
             (_, _, _, _) => {
-                unimplemented!("Opcode: {} is not implemented!", op);
+                unimplemented!("Opcode {:#06x} at pc {} is not implemented!", op, self.pc);
             }
         }
     }
